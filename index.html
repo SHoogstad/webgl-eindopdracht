@@ -72,7 +72,6 @@ void main(){
     frag = vec4(pow(lighting, vec3(1.0/2.2)),1.0);
 }`;
 
-    /* ================= PROGRAM ================= */
     function compile(type, src){
         const s=gl.createShader(type);
         gl.shaderSource(s, src);
@@ -89,7 +88,7 @@ void main(){
 
     gl.uniform1i(gl.getUniformLocation(prog,"tex"),0);
 
-    /* ================= MATH ================= */
+    // math functions
     function matMul(a,b){
         const r=new Float32Array(16);
         for(let i=0;i<4;i++)for(let j=0;j<4;j++)
@@ -129,7 +128,6 @@ void main(){
         ]);
     }
 
-    /* ================= MESH ================= */
     function createMesh(v,n,u,i){
         const vao=gl.createVertexArray();
         gl.bindVertexArray(vao);
@@ -147,7 +145,6 @@ void main(){
         return {vao,count:i.length};
     }
 
-    /* ================= SPHERE ================= */
     function sphere(r){
         const v=[],n=[],u=[],i=[];
         const seg=32;
@@ -167,7 +164,7 @@ void main(){
         return createMesh(v,n,u,i);
     }
 
-    /* ================= TEXTURE ================= */
+
     function loadTex(path){
         const t=gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D,t);
@@ -185,7 +182,6 @@ void main(){
         return t;
     }
 
-    /* ================= OBJ LOADER ================= */
     function loadOBJ(path){
         return fetch(path).then(r=>r.text()).then(text=>{
             const P=[],T=[],N=[];
@@ -215,7 +211,7 @@ void main(){
         });
     }
 
-    /* ================= SCENE ================= */
+    // scene
     const sun = sphere(1.5);
     const sunPos = [0,0,0];
     const sunTex = loadTex("textures/sun.jpg");
@@ -234,7 +230,7 @@ void main(){
     const uLight   = gl.getUniformLocation(prog,"lightPos");
     const uEmissive= gl.getUniformLocation(prog,"emissive");
 
-    /* ================= CAMERA ================= */
+    // camera functions
     const camera = {distance:20, rotX:0, rotY:0, speedRot:0.03, speedZoom:0.5};
     const keys = {};
     window.addEventListener('keydown',e=>keys[e.key.toLowerCase()]=true);
@@ -257,7 +253,7 @@ void main(){
         return lookAt([x,y,z],[0,0,0],[0,1,0]);
     }
 
-    /* ================= RENDER ================= */
+    // render pipeline
     let rot=0;
     function draw(){
         canvas.width = innerWidth;
@@ -273,7 +269,7 @@ void main(){
         gl.uniformMatrix4fv(gl.getUniformLocation(prog,"view"),false,view);
         gl.uniform3fv(uLight,sunPos);
 
-        // --- Sun ---
+        // sun
         gl.uniform1i(uEmissive,1);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D,sunTex);
@@ -284,7 +280,7 @@ void main(){
         gl.drawElements(gl.TRIANGLES,sun.count,gl.UNSIGNED_INT,0);
         gl.uniform1i(uEmissive,0);
 
-        // --- Earth ---
+        // non obj earth
         const earthOrbitRadius = 5;
         const earthOrbitSpeed = 0.5;
         const earthSpinSpeed  = 2;
@@ -300,7 +296,6 @@ void main(){
         gl.bindVertexArray(earth.vao);
         gl.drawElements(gl.TRIANGLES,earth.count,gl.UNSIGNED_INT,0);
 
-        // --- OBJ ---
         if(obj){
             const objOrbitRadius = 10;
             const objOrbitSpeed  = 0.8;
