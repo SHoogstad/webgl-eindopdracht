@@ -2,23 +2,21 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>WebGL2 Solar System + OBJ + Texture</title>
+    <title>WebGL2 Solar System + OBJ + Keyboard Camera</title>
     <style>
         body { margin:0; background:black; overflow:hidden; }
         canvas { width:100vw; height:100vh; display:block; }
     </style>
 </head>
 <body>
-
 <canvas id="gl"></canvas>
 
 <script>
     const canvas = document.getElementById("gl");
     const gl = canvas.getContext("webgl2");
-    if(!gl) alert("WebGL2 required");
+    if (!gl) alert("WebGL2 required");
 
     /* ================= SHADERS ================= */
-
     const vs = `#version 300 es
 layout(location=0) in vec3 pos;
 layout(location=1) in vec3 norm;
@@ -33,12 +31,13 @@ out vec3 vNormal;
 out vec2 vUV;
 
 void main(){
-    vec4 worldPos = model * vec4(pos, 1.0);
+    vec4 worldPos = model * vec4(pos,1.0);
     vWorldPos = worldPos.xyz;
     vNormal = mat3(model) * norm;
     vUV = uv;
     gl_Position = proj * view * worldPos;
-}`;
+}
+`;
 
     const fs = `#version 300 es
 precision highp float;
@@ -57,13 +56,10 @@ out vec4 frag;
 
 void main(){
     vec3 baseColor = color;
-
-    if(useTex){
-        baseColor *= texture(tex, vUV).rgb;
-    }
+    if(useTex) baseColor *= texture(tex, vUV).rgb;
 
     if(emissive){
-        baseColor *= 1.0;  // Sun brightness
+        baseColor *= 2.5; // brighten sun
         frag = vec4(pow(baseColor, vec3(1.0/2.2)),1.0);
         return;
     }
@@ -78,19 +74,19 @@ void main(){
 
     /* ================= PROGRAM ================= */
     function compile(type, src){
-        const s = gl.createShader(type);
+        const s=gl.createShader(type);
         gl.shaderSource(s, src);
         gl.compileShader(s);
         if(!gl.getShaderParameter(s, gl.COMPILE_STATUS))
             console.error(gl.getShaderInfoLog(s));
         return s;
     }
-
     const prog = gl.createProgram();
     gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
     gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
     gl.linkProgram(prog);
     gl.useProgram(prog);
+
     gl.uniform1i(gl.getUniformLocation(prog,"tex"),0);
 
     /* ================= MATH ================= */
@@ -100,9 +96,13 @@ void main(){
             r[i*4+j]=a[i*4+0]*b[0*4+j]+a[i*4+1]*b[1*4+j]+a[i*4+2]*b[2*4+j]+a[i*4+3]*b[3*4+j];
         return r;
     }
-    function identity(){ return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]); }
-    function translate(x,y,z){ return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,x,y,z,1]); }
-    function scale(s){ return new Float32Array([s,0,0,0,0,s,0,0,0,0,s,0,0,0,0,1]); }
+    function identity(){return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);}
+    function translate(x,y,z){return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,x,y,z,1]);}
+    function scale(s){return new Float32Array([s,0,0,0,0,s,0,0,0,0,s,0,0,0,0,1]);}
+    function rotateY(a){
+        const c=Math.cos(a), s=Math.sin(a);
+        return new Float32Array([c,0,s,0,0,1,0,0,-s,0,c,0,0,0,0,1]);
+    }
     function perspective(f,a,n,f2){
         const t=Math.tan(f/2);
         return new Float32Array([
@@ -114,9 +114,9 @@ void main(){
     }
     function lookAt(e,c,u){
         let z=[e[0]-c[0],e[1]-c[1],e[2]-c[2]];
-        z=z.map(v=>v/Math.hypot(...z));
+        let zl=Math.hypot(...z); z=z.map(v=>v/zl);
         let x=[u[1]*z[2]-u[2]*z[1], u[2]*z[0]-u[0]*z[2], u[0]*z[1]-u[1]*z[0]];
-        x=x.map(v=>v/Math.hypot(...x));
+        let xl=Math.hypot(...x); x=x.map(v=>v/xl);
         let y=[z[1]*x[2]-z[2]*x[1], z[2]*x[0]-z[0]*x[2], z[0]*x[1]-z[1]*x[0]];
         return new Float32Array([
             x[0],y[0],z[0],0,
@@ -129,9 +129,10 @@ void main(){
         ]);
     }
 
-    /* ================= MESH & SPHERE ================= */
+    /* ================= MESH ================= */
     function createMesh(v,n,u,i){
-        const vao=gl.createVertexArray(); gl.bindVertexArray(vao);
+        const vao=gl.createVertexArray();
+        gl.bindVertexArray(vao);
         const buf=(data,loc,size)=>{
             const b=gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER,b);
@@ -140,11 +141,13 @@ void main(){
             gl.vertexAttribPointer(loc,size,gl.FLOAT,false,0,0);
         };
         buf(v,0,3); buf(n,1,3); buf(u,2,2);
-        const ib=gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib);
+        const ib=gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint32Array(i),gl.STATIC_DRAW);
         return {vao,count:i.length};
     }
 
+    /* ================= SPHERE ================= */
     function sphere(r){
         const v=[],n=[],u=[],i=[];
         const seg=32;
@@ -153,10 +156,12 @@ void main(){
             const sx=Math.sin(th)*Math.cos(ph);
             const sy=Math.cos(th);
             const sz=Math.sin(th)*Math.sin(ph);
-            v.push(r*sx,r*sy,r*sz); n.push(sx,sy,sz); u.push(x/seg,1-y/seg);
+            v.push(r*sx,r*sy,r*sz);
+            n.push(sx,sy,sz);
+            u.push(x/seg,1-y/seg);
         }
         for(let y=0;y<seg;y++)for(let x=0;x<seg;x++){
-            const a=y*(seg+1)+x, b=a+seg+1;
+            const a=y*(seg+1)+x,b=a+seg+1;
             i.push(a,b,a+1,b,b+1,a+1);
         }
         return createMesh(v,n,u,i);
@@ -183,16 +188,14 @@ void main(){
     /* ================= OBJ LOADER ================= */
     function loadOBJ(path){
         return fetch(path).then(r=>r.text()).then(text=>{
-            const P=[], T=[], N=[];
-            const pos=[], uv=[], norm=[], idx=[];
+            const P=[],T=[],N=[];
+            const pos=[],uv=[],norm=[],idx=[];
             let index=0;
-
             text.split("\n").forEach(line=>{
                 line=line.trim();
-                if(line.startsWith("v "))  P.push(line.split(/\s+/).slice(1).map(Number));
+                if(line.startsWith("v ")) P.push(line.split(/\s+/).slice(1).map(Number));
                 if(line.startsWith("vt ")) T.push(line.split(/\s+/).slice(1).map(Number));
                 if(line.startsWith("vn ")) N.push(line.split(/\s+/).slice(1).map(Number));
-
                 if(line.startsWith("f ")){
                     const f=line.split(/\s+/).slice(1);
                     for(let i=1;i<f.length-1;i++){
@@ -214,88 +217,99 @@ void main(){
 
     /* ================= SCENE ================= */
     const sun = sphere(1.5);
+    const sunPos = [0,0,0];
     const sunTex = loadTex("textures/sun.jpg");
 
-    const earth = sphere(0.1);
-    const earthTex = loadTex("textures/Ocean_Mask_2K.png");
+    const earth = sphere(0.8);
+    const earthTex = loadTex("textures/Ocean_Mask_2k.png");
 
-    let obj = null;
-    const objTex = loadTex("textures/Ocean_Mask_2K.png"); // same texture for demo
+    let obj=null;
+    const objTex = earthTex
     loadOBJ("objects/model.obj").then(m=>obj=m);
+    const objOrbitOffset = Math.random()*Math.PI*2; // random start
 
-    const uEmissive = gl.getUniformLocation(prog,"emissive");
-    const uColor = gl.getUniformLocation(prog,"color");
-    const uUseTex = gl.getUniformLocation(prog,"useTex");
-    const uModel = gl.getUniformLocation(prog,"model");
+    const uModel   = gl.getUniformLocation(prog,"model");
+    const uUseTex  = gl.getUniformLocation(prog,"useTex");
+    const uColor   = gl.getUniformLocation(prog,"color");
+    const uLight   = gl.getUniformLocation(prog,"lightPos");
+    const uEmissive= gl.getUniformLocation(prog,"emissive");
 
-    let rot = 0;
-    let objOrbitOffset = Math.random() * Math.PI * 2; // random start angle
-
-    // rotation helper
-    function rotateY(a){
-        const c = Math.cos(a), s = Math.sin(a);
-        return new Float32Array([
-            c,0,s,0,
-            0,1,0,0,
-            -s,0,c,0,
-            0,0,0,1
-        ]);
+    /* ================= CAMERA ================= */
+    const camera = {distance:20, rotX:0, rotY:0, speedRot:0.03, speedZoom:0.5};
+    const keys = {};
+    window.addEventListener('keydown',e=>keys[e.key.toLowerCase()]=true);
+    window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+    function updateCamera(){
+        if(keys['a']) camera.rotY -= camera.speedRot;
+        if(keys['d']) camera.rotY += camera.speedRot;
+        if(keys['w']) camera.distance -= camera.speedZoom;
+        if(keys['s']) camera.distance += camera.speedZoom;
+        if(keys['q']) camera.rotX -= camera.speedRot;
+        if(keys['e']) camera.rotX += camera.speedRot;
+        camera.rotX = Math.max(-Math.PI/2+0.1, Math.min(Math.PI/2-0.1, camera.rotX));
+        camera.distance = Math.max(5, Math.min(100, camera.distance));
+    }
+    function getCameraView(){
+        updateCamera();
+        const x = Math.cos(camera.rotX)*Math.sin(camera.rotY)*camera.distance;
+        const y = Math.sin(camera.rotX)*camera.distance;
+        const z = Math.cos(camera.rotX)*Math.cos(camera.rotY)*camera.distance;
+        return lookAt([x,y,z],[0,0,0],[0,1,0]);
     }
 
+    /* ================= RENDER ================= */
+    let rot=0;
     function draw(){
         canvas.width = innerWidth;
         canvas.height = innerHeight;
         gl.viewport(0,0,canvas.width,canvas.height);
+        gl.clearColor(0,0,0,1);
         gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
         gl.enable(gl.DEPTH_TEST);
 
-        const proj = perspective(Math.PI/3, canvas.width/canvas.height, 0.1, 100);
+        const proj = perspective(Math.PI/3, canvas.width/canvas.height,0.1,100);
+        const view = getCameraView();
+        gl.uniformMatrix4fv(gl.getUniformLocation(prog,"proj"),false,proj);
+        gl.uniformMatrix4fv(gl.getUniformLocation(prog,"view"),false,view);
+        gl.uniform3fv(uLight,sunPos);
 
-        // ---- STATIC CAMERA ----
-        const cameraPos = [10, 4, 10]; // fixed camera
-        const view = lookAt(cameraPos, [0,0,0], [0,1,0]);
-
-        gl.uniformMatrix4fv(gl.getUniformLocation(prog,"proj"), false, proj);
-        gl.uniformMatrix4fv(gl.getUniformLocation(prog,"view"), false, view);
-
-        // Sun at origin
-        gl.uniformMatrix4fv(uModel,false,identity());
+        // --- Sun ---
         gl.uniform1i(uEmissive,1);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D,sunTex);
         gl.uniform1i(uUseTex,1);
         gl.uniform3fv(uColor,[1,1,1]);
+        gl.uniformMatrix4fv(uModel,false,identity());
         gl.bindVertexArray(sun.vao);
         gl.drawElements(gl.TRIANGLES,sun.count,gl.UNSIGNED_INT,0);
         gl.uniform1i(uEmissive,0);
 
-        // Earth orbit + spin
-        const orbitRadius = 5;
-        const orbitSpeed  = 0.5; // orbit around Sun
-        const spinSpeed   = 2;   // rotation on own axis
-        const spin = rotateY(rot * spinSpeed);
-        const orbit = translate(Math.cos(rot * orbitSpeed) * orbitRadius, 0, Math.sin(rot * orbitSpeed) * orbitRadius);
-        const modelMatrix = matMul(spin, orbit);
-
-        gl.uniformMatrix4fv(uModel, false, modelMatrix);
+        // --- Earth ---
+        const earthOrbitRadius = 5;
+        const earthOrbitSpeed = 0.5;
+        const earthSpinSpeed  = 2;
+        const earthSpin = rotateY(rot*earthSpinSpeed);
+        const earthOrbit = translate(Math.cos(rot*earthOrbitSpeed)*earthOrbitRadius,0,
+            Math.sin(rot*earthOrbitSpeed)*earthOrbitRadius);
+        const earthModel = matMul(earthOrbit, earthSpin);
+        gl.uniformMatrix4fv(uModel,false,earthModel);
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, earthTex);
-        gl.uniform1i(uUseTex, 1);
-        gl.uniform3fv(uColor, [1,1,1]);
+        gl.bindTexture(gl.TEXTURE_2D,earthTex);
+        gl.uniform1i(uUseTex,1);
+        gl.uniform3fv(uColor,[1,1,1]);
         gl.bindVertexArray(earth.vao);
-        gl.drawElements(gl.TRIANGLES, earth.count, gl.UNSIGNED_INT, 0);
+        gl.drawElements(gl.TRIANGLES,earth.count,gl.UNSIGNED_INT,0);
 
-
-        // OBJ orbit + spin
+        // --- OBJ ---
         if(obj){
             const objOrbitRadius = 10;
             const objOrbitSpeed  = 0.8;
             const objSpinSpeed   = 1.5;
 
             const objOrbit = translate(
-                Math.cos(rot*objOrbitSpeed + objOrbitOffset)*objOrbitRadius,
+                Math.cos(rot*objOrbitSpeed+objOrbitOffset)*objOrbitRadius,
                 0,
-                Math.sin(rot*objOrbitSpeed + objOrbitOffset)*objOrbitRadius
+                Math.sin(rot*objOrbitSpeed+objOrbitOffset)*objOrbitRadius
             );
             const objSpin  = rotateY(rot*objSpinSpeed);
             const objModel = matMul(matMul(objSpin,objOrbit), scale(0.25));
@@ -309,11 +323,10 @@ void main(){
             gl.drawElements(gl.TRIANGLES,obj.count,gl.UNSIGNED_INT,0);
         }
 
-        rot += 0.002;
+        rot += 0.01;
         requestAnimationFrame(draw);
     }
-
-    draw()
+    draw();
 </script>
 </body>
 </html>
