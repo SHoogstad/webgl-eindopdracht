@@ -1,518 +1,271 @@
 <!DOCTYPE html>
-<html lang="nl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>WebGL2 Space Shooter - Computer Graphics Demo</title>
+    <title>WebGL2 Solar System + OBJ + Mask</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: monospace; color: #0ff; }
-        canvas { display: block; width: 100vw; height: 100vh; }
-        #ui { position: absolute; top: 20px; left: 20px; font-size: 18px; text-shadow: 0 0 10px #0ff; }
-        .overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            text-align: center; background: rgba(0,0,0,0.9); padding: 30px; border: 2px solid #0ff; }
-        #start { display: block; } #gameOver { display: none; }
+        body { margin:0; background:black; overflow:hidden; }
+        canvas { width:100vw; height:100vh; display:block; }
     </style>
 </head>
 <body>
-<canvas id="c"></canvas>
-<div id="ui">
-    Score: <span id="score">0</span> | Health: <span id="health">100</span><br>
-    <small>WASD: Move | SPACE: Shoot | P: Pause</small>
-</div>
-<div id="start" class="overlay">
-    <h2>SPACE SHOOTER</h2>
-    <p>Destroy enemy ships!</p>
-    <p>WASD - Move | SPACE - Shoot</p>
-    <button onclick="start()" style="margin-top:20px;padding:10px 20px;font-size:16px;cursor:pointer;">START</button>
-</div>
-<div id="gameOver" class="overlay">
-    <h2>GAME OVER</h2>
-    <p>Score: <span id="finalScore">0</span></p>
-    <button onclick="start()" style="margin-top:20px;padding:10px 20px;font-size:16px;cursor:pointer;">RESTART</button>
-</div>
+
+<canvas id="gl"></canvas>
 
 <script>
-    const c = document.getElementById('c');
-    const gl = c.getContext('webgl2');
-    if (!gl) alert('WebGL2 not supported!');
+    const canvas = document.getElementById("gl");
+    const gl = canvas.getContext("webgl2");
+    if (!gl) alert("WebGL2 required");
 
-    // Shaders
+    // ================= SHADERS =================
     const vs = `#version 300 es
-in vec3 pos; in vec3 norm; in vec2 uv;
-uniform mat4 model, view, proj, normMat;
-out vec3 vNorm, vPos; out vec2 vUV;
-void main() {
-    vec4 wp = model * vec4(pos, 1.0);
-    vPos = wp.xyz; vNorm = mat3(normMat) * norm; vUV = uv;
-    gl_Position = proj * view * wp;
+layout(location=0) in vec3 pos;
+layout(location=1) in vec3 norm;
+layout(location=2) in vec2 uv;
+
+uniform mat4 model, view, proj;
+
+out vec3 vN;
+out vec2 vUV;
+
+void main(){
+    vN = mat3(model) * norm;
+    vUV = uv;
+    gl_Position = proj * view * model * vec4(pos,1.0);
 }`;
 
     const fs = `#version 300 es
 precision highp float;
-in vec3 vNorm, vPos; in vec2 vUV;
-uniform vec3 color, lightPos, viewPos;
-uniform bool useTex; uniform sampler2D tex;
-out vec4 fragColor;
-void main() {
-    vec3 N = normalize(vNorm);
-    vec3 L = normalize(lightPos - vPos);
-    vec3 V = normalize(viewPos - vPos);
-    vec3 R = reflect(-L, N);
 
-    float diff = max(dot(N, L), 0.0);
-    float spec = pow(max(dot(V, R), 0.0), 32.0);
+in vec3 vN;
+in vec2 vUV;
 
-    vec3 ambient = vec3(0.2);
-    vec3 diffuse = diff * vec3(1.0);
-    vec3 specular = spec * vec3(0.5);
+uniform sampler2D tex;
+uniform vec3 color;
+uniform bool useTex;
 
-    vec3 base = color;
-    if (useTex) base *= texture(tex, vUV).rgb;
+out vec4 frag;
 
-    fragColor = vec4((ambient + diffuse + specular) * base, 1.0);
+void main(){
+    vec3 lightDir = normalize(vec3(1.0,1.0,1.0));
+    float diff = max(dot(normalize(vN), lightDir), 0.0);
+
+    vec3 baseColor = color;
+
+    if(useTex){
+        vec3 texColor = texture(tex, vUV).rgb;
+        float mask = (texColor.r + texColor.g + texColor.b) / 3.0; // grayscale mask
+        baseColor *= mask;
+    }
+
+    frag = vec4(baseColor * (0.3 + diff * 0.7), 1.0);
 }`;
 
-    const pvs = `#version 300 es
-in vec3 pos; in float size; in vec4 col;
-uniform mat4 view, proj;
-out vec4 vCol;
-void main() {
-    vCol = col;
-    gl_Position = proj * view * vec4(pos, 1.0);
-    gl_PointSize = size;
-}`;
-
-    const pfs = `#version 300 es
-precision highp float;
-in vec4 vCol; out vec4 fragColor;
-void main() {
-    vec2 coord = gl_PointCoord - vec2(0.5);
-    if (length(coord) > 0.5) discard;
-    fragColor = vCol;
-}`;
-
-    function compileShader(src, type) {
+    // ================= PROGRAM =================
+    function compile(type, src){
         const s = gl.createShader(type);
         gl.shaderSource(s, src);
         gl.compileShader(s);
-        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        if(!gl.getShaderParameter(s, gl.COMPILE_STATUS))
             console.error(gl.getShaderInfoLog(s));
-            return null;
-        }
         return s;
     }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(prog);
+    gl.useProgram(prog);
 
-    function createProgram(vs, fs) {
-        const p = gl.createProgram();
-        gl.attachShader(p, compileShader(vs, gl.VERTEX_SHADER));
-        gl.attachShader(p, compileShader(fs, gl.FRAGMENT_SHADER));
-        gl.linkProgram(p);
-        return p;
+    // ================= MATH =================
+    function matMul(a,b){
+        const r=new Float32Array(16);
+        for(let i=0;i<4;i++)for(let j=0;j<4;j++)
+            r[i*4+j]=a[i*4+0]*b[0*4+j]+a[i*4+1]*b[1*4+j]+a[i*4+2]*b[2*4+j]+a[i*4+3]*b[3*4+j];
+        return r;
     }
-
-    const prog = createProgram(vs, fs);
-    const pprog = createProgram(pvs, pfs);
-
-    // Matrix utilities
-    function perspective(fov, aspect, near, far) {
-        const f = 1 / Math.tan(fov / 2), nf = 1 / (near - far);
-        return new Float32Array([f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0]);
-    }
-
-    function lookAt(eye, center, up) {
-        const z = [eye[0]-center[0], eye[1]-center[1], eye[2]-center[2]];
-        const zl = Math.sqrt(z[0]*z[0]+z[1]*z[1]+z[2]*z[2]);
-        z[0]/=zl; z[1]/=zl; z[2]/=zl;
-
-        const x = [up[1]*z[2]-up[2]*z[1], up[2]*z[0]-up[0]*z[2], up[0]*z[1]-up[1]*z[0]];
-        const xl = Math.sqrt(x[0]*x[0]+x[1]*x[1]+x[2]*x[2]);
-        x[0]/=xl; x[1]/=xl; x[2]/=xl;
-
-        const y = [z[1]*x[2]-z[2]*x[1], z[2]*x[0]-z[0]*x[2], z[0]*x[1]-z[1]*x[0]];
-
+    function identity(){ return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]); }
+    function translate(x,y,z){ return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,x,y,z,1]); }
+    function scale(s){ return new Float32Array([s,0,0,0,0,s,0,0,0,0,s,0,0,0,0,1]); }
+    function perspective(f,a,n,f2){
+        const t=Math.tan(f/2);
         return new Float32Array([
-            x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0,
-            -(x[0]*eye[0]+x[1]*eye[1]+x[2]*eye[2]),
-            -(y[0]*eye[0]+y[1]*eye[1]+y[2]*eye[2]),
-            -(z[0]*eye[0]+z[1]*eye[1]+z[2]*eye[2]), 1
+            1/(a*t),0,0,0,
+            0,1/t,0,0,
+            0,0,(f2+n)/(n-f2),-1,
+            0,0,(2*f2*n)/(n-f2),0
+        ]);
+    }
+    function lookAt(e,c,u){
+        let z=[e[0]-c[0],e[1]-c[1],e[2]-c[2]];
+        let zl=Math.hypot(...z); z=z.map(v=>v/zl);
+        let x=[u[1]*z[2]-u[2]*z[1], u[2]*z[0]-u[0]*z[2], u[0]*z[1]-u[1]*z[0]];
+        let xl=Math.hypot(...x); x=x.map(v=>v/xl);
+        let y=[z[1]*x[2]-z[2]*x[1], z[2]*x[0]-z[0]*x[2], z[0]*x[1]-z[1]*x[0]];
+        return new Float32Array([
+            x[0],y[0],z[0],0,
+            x[1],y[1],z[1],0,
+            x[2],y[2],z[2],0,
+            -(x[0]*e[0]+x[1]*e[1]+x[2]*e[2]),
+            -(y[0]*e[0]+y[1]*e[1]+y[2]*e[2]),
+            -(z[0]*e[0]+z[1]*e[1]+z[2]*e[2]),
+            1
         ]);
     }
 
-    function translate(x, y, z) {
-        return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, x,y,z,1]);
-    }
-
-    function rotateY(a) {
-        const c = Math.cos(a), s = Math.sin(a);
-        return new Float32Array([c,0,s,0, 0,1,0,0, -s,0,c,0, 0,0,0,1]);
-    }
-
-    function scale(x, y, z) {
-        return new Float32Array([x,0,0,0, 0,y,0,0, 0,0,z,0, 0,0,0,1]);
-    }
-
-    function multiply(a, b) {
-        const r = new Float32Array(16);
-        for (let i = 0; i < 4; i++)
-            for (let j = 0; j < 4; j++)
-                r[i*4+j] = a[i*4]*b[j] + a[i*4+1]*b[4+j] + a[i*4+2]*b[8+j] + a[i*4+3]*b[12+j];
-        return r;
-    }
-
-    function transpose(m) {
-        return new Float32Array([m[0],m[4],m[8],m[12], m[1],m[5],m[9],m[13],
-            m[2],m[6],m[10],m[14], m[3],m[7],m[11],m[15]]);
-    }
-
-    // Geometry
-    function createSphere(r, lat, lon) {
-        const v = [], n = [], uv = [], idx = [];
-        for (let i = 0; i <= lat; i++) {
-            const th = i * Math.PI / lat, st = Math.sin(th), ct = Math.cos(th);
-            for (let j = 0; j <= lon; j++) {
-                const ph = j * 2 * Math.PI / lon, sp = Math.sin(ph), cp = Math.cos(ph);
-                const x = cp * st, y = ct, z = sp * st;
-                v.push(r*x, r*y, r*z);
-                n.push(x, y, z);
-                uv.push(1 - j/lon, 1 - i/lat);
-            }
-        }
-        for (let i = 0; i < lat; i++) {
-            for (let j = 0; j < lon; j++) {
-                const f = i * (lon + 1) + j, s = f + lon + 1;
-                idx.push(f, s, f+1, s, s+1, f+1);
-            }
-        }
-        return {v, n, uv, idx};
-    }
-
-    function createShip() {
-        // Simple spaceship model
-        const v = [
-            0,0,1.5, -0.3,0.1,0.5, 0.3,0.1,0.5, -0.3,-0.1,0.5, 0.3,-0.1,0.5,
-            -0.4,0.2,0.5, 0.4,0.2,0.5, -0.4,-0.2,0.5, 0.4,-0.2,0.5,
-            -0.4,0.2,-0.5, 0.4,0.2,-0.5, -0.4,-0.2,-0.5, 0.4,-0.2,-0.5,
-            -1.2,0,0, -0.4,0,0.3, 1.2,0,0, 0.4,0,0.3, 0,0.5,-0.5, 0,-0.5,-0.5
-        ];
-        const idx = [
-            0,1,2, 0,3,4, 5,6,7, 7,6,8, 9,10,11, 11,10,12,
-            5,9,6, 6,9,10, 7,11,8, 8,11,12, 13,14,5, 15,16,6, 17,9,11, 18,11,12
-        ];
-        const n = [], uv = [];
-        for (let i = 0; i < v.length/3; i++) { n.push(0,1,0); uv.push(0,0); }
-        return {v, n, uv, idx};
-    }
-
-    function createBuffers(geom) {
-        const vao = gl.createVertexArray();
+    // ================= MESH =================
+    function createMesh(v,n,u,i){
+        const vao=gl.createVertexArray();
         gl.bindVertexArray(vao);
 
-        const vbo = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(geom.v), gl.STATIC_DRAW);
-        gl.enableVertexAttribArray(0);
-        gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+        function buf(data,loc,size){
+            const b=gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER,b);
+            gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(data),gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(loc);
+            gl.vertexAttribPointer(loc,size,gl.FLOAT,false,0,0);
+        }
+        buf(v,0,3);
+        buf(n,1,3);
+        buf(u,2,2);
 
-        const nbo = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, nbo);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(geom.n), gl.STATIC_DRAW);
-        gl.enableVertexAttribArray(1);
-        gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+        const ib=gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint32Array(i),gl.STATIC_DRAW);
 
-        const tbo = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, tbo);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(geom.uv), gl.STATIC_DRAW);
-        gl.enableVertexAttribArray(2);
-        gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 0, 0);
-
-        const ibo = gl.createBuffer();
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(geom.idx), gl.STATIC_DRAW);
-
-        gl.bindVertexArray(null);
-        return {vao, count: geom.idx.length};
+        return {vao,count:i.length};
     }
 
-    const sphere = createBuffers(createSphere(0.5, 16, 16));
-    const ship = createBuffers(createShip());
+    // ================= SPHERE =================
+    function sphere(r){
+        const v=[],n=[],u=[],i=[];
+        const seg=32;
+        for(let y=0;y<=seg;y++)for(let x=0;x<=seg;x++){
+            const th=y*Math.PI/seg;
+            const ph=x*2*Math.PI/seg;
+            const sx=Math.sin(th)*Math.cos(ph);
+            const sy=Math.cos(th);
+            const sz=Math.sin(th)*Math.sin(ph);
+            v.push(r*sx,r*sy,r*sz);
+            n.push(sx,sy,sz);
+            u.push(x/seg,1-y/seg);
+        }
+        for(let y=0;y<seg;y++)for(let x=0;x<seg;x++){
+            const a=y*(seg+1)+x;
+            const b=a+seg+1;
+            i.push(a,b,a+1,b,b+1,a+1);
+        }
+        return createMesh(v,n,u,i);
+    }
 
-    // Procedural textures
-    function createTexture(type) {
-        const sz = 64, data = new Uint8Array(sz * sz * 4);
-        for (let y = 0; y < sz; y++) {
-            for (let x = 0; x < sz; x++) {
-                const i = (y * sz + x) * 4;
-                const p = Math.sin(x * 0.4) * Math.cos(y * 0.4);
-                if (type === 'enemy') {
-                    data[i] = 180 + p * 40; data[i+1] = 30; data[i+2] = 30;
-                } else {
-                    data[i] = 30; data[i+1] = 120 + p * 40; data[i+2] = 220 + p * 30;
+    // ================= TEXTURE =================
+    function loadTex(path){
+        const t=gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D,t);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([255,255,255,255]));
+        const img=new Image();
+        img.onload=()=>{
+            gl.bindTexture(gl.TEXTURE_2D,t);
+            gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);
+            gl.generateMipmap(gl.TEXTURE_2D);
+        };
+        img.src=path;
+        return t;
+    }
+
+    // ================= OBJ LOADER =================
+    function loadOBJ(path){
+        return fetch(path).then(r=>r.text()).then(text=>{
+            const verts=[],pos=[],norm=[],uv=[],idx=[];
+            let index=0;
+
+            function faceNormal(a,b,c){
+                const ab=[b[0]-a[0],b[1]-a[1],b[2]-a[2]];
+                const ac=[c[0]-a[0],c[1]-a[1],c[2]-a[2]];
+                const n=[
+                    ab[1]*ac[2]-ab[2]*ac[1],
+                    ab[2]*ac[0]-ab[0]*ac[2],
+                    ab[0]*ac[1]-ab[1]*ac[0]
+                ];
+                const l=Math.hypot(...n);
+                return [n[0]/l,n[1]/l,n[2]/l];
+            }
+
+            text.split("\n").forEach(l=>{
+                l=l.trim();
+                if(l.startsWith("v ")) verts.push(l.split(/\s+/).slice(1).map(Number));
+                if(l.startsWith("f ")){
+                    const f=l.split(/\s+/).slice(1).map(v=>verts[parseInt(v)-1]);
+                    for(let i=1;i<f.length-1;i++){
+                        const a=f[0],b=f[i],c=f[i+1];
+                        const n=faceNormal(a,b,c);
+                        pos.push(...a,...b,...c);
+                        norm.push(...n,...n,...n);
+                        uv.push(0,0, 0,0, 0,0);
+                        idx.push(index,index+1,index+2);
+                        index+=3;
+                    }
                 }
-                data[i+3] = 255;
-            }
-        }
-        const tex = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, sz, sz, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
-        gl.generateMipmap(gl.TEXTURE_2D);
-        return tex;
-    }
-
-    const enemyTex = createTexture('enemy');
-    const playerTex = createTexture('player');
-
-    // Game state
-    const state = {
-        player: {x: 0, y: 0, z: 0, health: 100},
-        enemies: [],
-        bullets: [],
-        particles: [],
-        score: 0,
-        running: false,
-        paused: false,
-        keys: {},
-        lastShot: 0
-    };
-
-    document.addEventListener('keydown', e => {
-        state.keys[e.key.toLowerCase()] = true;
-        if (e.key === ' ' && state.running && !state.paused) {
-            e.preventDefault();
-            const now = Date.now();
-            if (now - state.lastShot > 150) {
-                state.lastShot = now;
-                state.bullets.push({x: state.player.x, y: state.player.y, z: state.player.z, vz: 0.5});
-                spawnParticles(state.player.x, state.player.y, state.player.z, [0,0.5,1], 5);
-            }
-        }
-        if (e.key.toLowerCase() === 'p') state.paused = !state.paused;
-    });
-
-    document.addEventListener('keyup', e => state.keys[e.key.toLowerCase()] = false);
-
-    function start() {
-        state.running = true;
-        state.paused = false;
-        state.player = {x: 0, y: 0, z: 0, health: 100};
-        state.enemies = [];
-        state.bullets = [];
-        state.particles = [];
-        state.score = 0;
-        document.getElementById('start').style.display = 'none';
-        document.getElementById('gameOver').style.display = 'none';
-    }
-
-    function spawnParticles(x, y, z, col, n) {
-        for (let i = 0; i < n; i++) {
-            state.particles.push({
-                x, y, z,
-                vx: (Math.random() - 0.5) * 0.1,
-                vy: (Math.random() - 0.5) * 0.1,
-                vz: (Math.random() - 0.5) * 0.1,
-                col: [...col, 1],
-                life: 1.0,
-                size: 5 + Math.random() * 5
             });
-        }
-    }
-
-    function update(dt) {
-        if (!state.running || state.paused) return;
-
-        // Player movement
-        const spd = 0.08 * dt;
-        if (state.keys['w']) state.player.y = Math.min(3, state.player.y + spd);
-        if (state.keys['s']) state.player.y = Math.max(-3, state.player.y - spd);
-        if (state.keys['a']) state.player.x = Math.max(-5, state.player.x - spd);
-        if (state.keys['d']) state.player.x = Math.min(5, state.player.x + spd);
-
-        // Spawn enemies
-        if (Math.random() < 0.02) {
-            state.enemies.push({
-                x: (Math.random() - 0.5) * 10,
-                y: (Math.random() - 0.5) * 6,
-                z: 20,
-                rot: 0
-            });
-        }
-
-        // Update enemies
-        state.enemies = state.enemies.filter(e => {
-            e.z -= 0.05 * dt;
-            e.rot += 0.02 * dt;
-
-            // Check collision with player
-            const dx = e.x - state.player.x;
-            const dy = e.y - state.player.y;
-            const dz = e.z - state.player.z;
-            if (Math.sqrt(dx*dx + dy*dy + dz*dz) < 0.8) {
-                state.player.health -= 10;
-                spawnParticles(e.x, e.y, e.z, [1,0.3,0], 15);
-                if (state.player.health <= 0) gameOver();
-                return false;
-            }
-
-            return e.z > -2;
+            return createMesh(pos,norm,uv,idx);
         });
-
-        // Update bullets
-        state.bullets = state.bullets.filter(b => {
-            b.z += b.vz * dt;
-
-            // Check hit
-            for (let i = 0; i < state.enemies.length; i++) {
-                const e = state.enemies[i];
-                const dx = e.x - b.x, dy = e.y - b.y, dz = e.z - b.z;
-                if (Math.sqrt(dx*dx + dy*dy + dz*dz) < 0.7) {
-                    spawnParticles(e.x, e.y, e.z, [1,0,0], 20);
-                    state.enemies.splice(i, 1);
-                    state.score += 10;
-                    return false;
-                }
-            }
-
-            return b.z < 25;
-        });
-
-        // Update particles
-        state.particles = state.particles.filter(p => {
-            p.x += p.vx * dt;
-            p.y += p.vy * dt;
-            p.z += p.vz * dt;
-            p.life -= 0.02 * dt;
-            p.col[3] = p.life;
-            return p.life > 0;
-        });
-
-        // Update UI
-        document.getElementById('score').textContent = state.score;
-        document.getElementById('health').textContent = Math.max(0, state.player.health);
     }
 
-    function gameOver() {
-        state.running = false;
-        document.getElementById('finalScore').textContent = state.score;
-        document.getElementById('gameOver').style.display = 'block';
-    }
+    // ================= SCENE =================
+    const sun = sphere(1.5);
+    const earth = sphere(0.8);
+    const earthTex = loadTex("textures/Ocean_Mask_2K.png");
 
-    function resize() {
-        c.width = window.innerWidth;
-        c.height = window.innerHeight;
-        gl.viewport(0, 0, c.width, c.height);
-    }
-    resize();
-    window.addEventListener('resize', resize);
+    let obj = null;
+    loadOBJ("objects/model.obj").then(m => obj = m);
 
-    // Render
-    function render(time) {
-        const dt = 16;
-        update(dt);
+    // Enable alpha blending (optional if mask has transparency)
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-        gl.clearColor(0, 0, 0.05, 1);
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    // ================= RENDER =================
+    let rot = 0;
+    function draw(){
+        canvas.width = innerWidth;
+        canvas.height = innerHeight;
+        gl.viewport(0,0,canvas.width,canvas.height);
         gl.enable(gl.DEPTH_TEST);
-        gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.clearColor(0,0,0,1);
+        gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
 
-        const proj = perspective(Math.PI/3, c.width/c.height, 0.1, 100);
-        const view = lookAt([0, 0, -8], [0, 0, 0], [0, 1, 0]);
-        const viewPos = [0, 0, -8];
-        const lightPos = [0, 10, -5];
+        const proj = perspective(Math.PI/3, canvas.width/canvas.height, 0.1, 100);
+        const view = lookAt([Math.sin(rot)*10,4,Math.cos(rot)*10],[0,0,0],[0,1,0]);
 
-        gl.useProgram(prog);
-        const uModel = gl.getUniformLocation(prog, 'model');
-        const uView = gl.getUniformLocation(prog, 'view');
-        const uProj = gl.getUniformLocation(prog, 'proj');
-        const uNorm = gl.getUniformLocation(prog, 'normMat');
-        const uColor = gl.getUniformLocation(prog, 'color');
-        const uLight = gl.getUniformLocation(prog, 'lightPos');
-        const uViewPos = gl.getUniformLocation(prog, 'viewPos');
-        const uUseTex = gl.getUniformLocation(prog, 'useTex');
-        const uTex = gl.getUniformLocation(prog, 'tex');
+        gl.uniformMatrix4fv(gl.getUniformLocation(prog,"proj"), false, proj);
+        gl.uniformMatrix4fv(gl.getUniformLocation(prog,"view"), false, view);
 
-        gl.uniformMatrix4fv(uView, false, view);
-        gl.uniformMatrix4fv(uProj, false, proj);
-        gl.uniform3fv(uLight, lightPos);
-        gl.uniform3fv(uViewPos, viewPos);
-        gl.uniform1i(uTex, 0);
+        // --- Sun ---
+        gl.uniform1i(gl.getUniformLocation(prog,"useTex"),0);
+        gl.uniform3fv(gl.getUniformLocation(prog,"color"), [1,0.7,0.2]);
+        gl.uniformMatrix4fv(gl.getUniformLocation(prog,"model"), false, identity());
+        gl.bindVertexArray(sun.vao);
+        gl.drawElements(gl.TRIANGLES, sun.count, gl.UNSIGNED_INT, 0);
 
-        // Draw player
-        if (state.running) {
-            const model = multiply(translate(state.player.x, state.player.y, state.player.z), scale(0.5, 0.5, 0.5));
-            gl.uniformMatrix4fv(uModel, false, model);
-            gl.uniformMatrix4fv(uNorm, false, transpose(model));
-            gl.uniform3f(uColor, 0.2, 0.6, 1.0);
-            gl.uniform1i(uUseTex, 1);
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, playerTex);
-            gl.bindVertexArray(ship.vao);
-            gl.drawElements(gl.TRIANGLES, ship.count, gl.UNSIGNED_SHORT, 0);
+        // --- Earth (mask applied) ---
+        gl.uniform1i(gl.getUniformLocation(prog,"useTex"),1);
+        gl.bindTexture(gl.TEXTURE_2D, earthTex);
+        gl.uniform3fv(gl.getUniformLocation(prog,"color"), [0.2,0.5,1]); // Earth blue
+        gl.uniformMatrix4fv(gl.getUniformLocation(prog,"model"), false, matMul(translate(5,0,0), scale(0.8)));
+        gl.bindVertexArray(earth.vao);
+        gl.drawElements(gl.TRIANGLES, earth.count, gl.UNSIGNED_INT, 0);
+
+        // --- OBJ ---
+        if(obj){
+            gl.uniform1i(gl.getUniformLocation(prog,"useTex"),0);
+            gl.uniform3fv(gl.getUniformLocation(prog,"color"), [0.8,0.8,0.8]);
+            gl.uniformMatrix4fv(gl.getUniformLocation(prog,"model"), false, matMul(translate(-5,0,0), scale(0.5)));
+            gl.bindVertexArray(obj.vao);
+            gl.drawElements(gl.TRIANGLES, obj.count, gl.UNSIGNED_INT, 0);
         }
 
-        // Draw enemies
-        gl.uniform1i(uUseTex, 1);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, enemyTex);
-        gl.bindVertexArray(sphere.vao);
-        for (const e of state.enemies) {
-            const model = multiply(multiply(translate(e.x, e.y, e.z), rotateY(e.rot)), scale(0.6, 0.6, 0.6));
-            gl.uniformMatrix4fv(uModel, false, model);
-            gl.uniformMatrix4fv(uNorm, false, transpose(model));
-            gl.uniform3f(uColor, 1.0, 0.2, 0.2);
-            gl.drawElements(gl.TRIANGLES, sphere.count, gl.UNSIGNED_SHORT, 0);
-        }
-
-        // Draw bullets
-        gl.uniform1i(uUseTex, 0);
-        for (const b of state.bullets) {
-            const model = multiply(translate(b.x, b.y, b.z), scale(0.1, 0.1, 0.3));
-            gl.uniformMatrix4fv(uModel, false, model);
-            gl.uniformMatrix4fv(uNorm, false, transpose(model));
-            gl.uniform3f(uColor, 0, 1, 1);
-            gl.drawElements(gl.TRIANGLES, sphere.count, gl.UNSIGNED_SHORT, 0);
-        }
-
-        // Draw particles
-        if (state.particles.length > 0) {
-            gl.useProgram(pprog);
-            gl.uniformMatrix4fv(gl.getUniformLocation(pprog, 'view'), false, view);
-            gl.uniformMatrix4fv(gl.getUniformLocation(pprog, 'proj'), false, proj);
-
-            const pData = [], sData = [], cData = [];
-            for (const p of state.particles) {
-                pData.push(p.x, p.y, p.z);
-                sData.push(p.size);
-                cData.push(...p.col);
-            }
-
-            const pvao = gl.createVertexArray();
-            gl.bindVertexArray(pvao);
-
-            const pb = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, pb);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pData), gl.DYNAMIC_DRAW);
-            gl.enableVertexAttribArray(0);
-            gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-
-            const sb = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, sb);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(sData), gl.DYNAMIC_DRAW);
-            gl.enableVertexAttribArray(1);
-            gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 0, 0);
-
-            const cb = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, cb);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cData), gl.DYNAMIC_DRAW);
-            gl.enableVertexAttribArray(2);
-            gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 0, 0);
-
-            gl.drawArrays(gl.POINTS, 0, state.particles.length);
-        }
-
-        requestAnimationFrame(render);
+        rot += 0.002;
+        requestAnimationFrame(draw);
     }
-
-    document.getElementById('start').style.display = 'block';
-    requestAnimationFrame(render);
+    draw();
 </script>
 </body>
 </html>
